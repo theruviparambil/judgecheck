@@ -75,6 +75,28 @@ jobs:
           fi
           judgecheck report tests/data/panel-real --fail-under 0.1 > /dev/null
 
+  crossvalidation:
+    name: cross-validated against statsmodels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,crossval]"
+
+      # The reproduction suite compares this package against one written by the
+      # same author. This compares the coefficients against implementations
+      # written by other people, which is the failure mode reproduction cannot
+      # see: both being wrong the same way.
+      - name: Check the coefficients against independent libraries
+        run: pytest tests/test_crossvalidation.py -v
+
+      # Full suite with the extras present, which is the only configuration
+      # where the README's stated test count can be checked.
+      - name: Full suite with extras
+        run: pytest
+
   mutation:
     name: mutation sweep
     runs-on: ubuntu-latest

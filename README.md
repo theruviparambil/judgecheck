@@ -93,9 +93,11 @@ here as describing this panel, not as an estimate of a population value.
 
 Four sections, from one pass over the panel:
 
-**Panel agreement.** Fleiss' κ and Krippendorff's α, the defined statistics for
-more than two raters. Averaging pairwise Cohen's κ is not a panel coefficient,
-so judgecheck reports the mean separately and labels it what it is.
+**Panel agreement.** Fleiss' κ and Krippendorff's α, both defined for more than
+two raters. Averaging pairwise Cohen's κ is not a defined panel coefficient, so
+judgecheck reports that mean separately and labels it what it is. Both are
+computed in a form that tolerates a rater skipping an item; on a complete panel
+like this one that reduces to the standard definitions.
 
 **Validity.** Recall and precision against adjudicated truth, binary for one
 positive label rather than macro-averaged. `NEEDS_INVESTIGATION` is an
@@ -178,10 +180,14 @@ ordinary dicts without adopting any types from this package.
 ## How it is verified
 
 ```
-pytest          146 passed on 3.10, 3.11, 3.12, 3.13
-mypy --strict   clean across src and tests
+pytest          150 tests on 3.10, 3.11, 3.12, 3.13
+mypy --strict   clean across src, tests, and scripts
 ruff            check and format clean
 mutation sweep  36/36 mutants killed
+cross-check     Fleiss, Krippendorff, 21 Cohen pairs vs third-party libraries
+
+Four of the 150 are the cross-validation tests and need the `crossval` extra;
+they skip without it, and CI installs it in a dedicated job.
 ```
 
 The reproduction tests prove judgecheck agrees with the reference
@@ -217,10 +223,35 @@ green, it exposed four real defects:
 That is the honest limit of reproduction-as-a-test-suite: it proves you match
 the reference on the data you have, not that you handle the data you do not.
 
+## Independently cross-checked
+
+Reproducing veriva-eval proves the port is faithful. It cannot catch a formula
+that both implementations get wrong in the same way, because they share an
+author. So the coefficients are also checked against libraries written by other
+people:
+
+| coefficient | checked against | difference |
+| --- | --- | --- |
+| Fleiss' κ | `statsmodels` | 0.0, bit-identical |
+| Cohen's κ, all 21 pairs | `statsmodels` | 0.0, bit-identical |
+| Krippendorff's α | `krippendorff` | 4.4e-16, one ulp |
+
+The alpha difference is float non-associativity: the two implementations
+accumulate the coincidence matrix in a different order. It is not disagreement.
+
+`tests/test_crossvalidation.py` runs these on every CI build. They need extras
+the base install leaves out:
+
+```bash
+pip install -e ".[crossval]"
+pytest tests/test_crossvalidation.py
+```
+
 ## Scope
 
-v1 covers what the reference implementation covers, plus the `--fail-under`
-gate. Not included: weighted or ordinal κ, bootstrap confidence intervals, or
+v1 covers the agreement and reliability statistics the reference implementation
+computes, plus the `--fail-under` gate. It is not a port of that project's live
+judge or model benchmark. Also not included: weighted or ordinal κ, bootstrap confidence intervals, or
 any default threshold. A tool that ships a built-in idea of "enough agreement"
 makes that call on your behalf and hides it in a default.
 

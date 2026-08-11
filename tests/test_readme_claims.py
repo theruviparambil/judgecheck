@@ -220,7 +220,7 @@ class TestVerificationBlockClaims:
         assert m.group(1) == m.group(2), "README claims a clean sweep"
 
     def test_python_versions_match_pyproject(self) -> None:
-        m = _find(r"pytest\s+\d+ passed on ([\d., ]+)\n")
+        m = _find(r"pytest\s+\d+ tests on ([\d., ]+)\n")
         stated = {v.strip() for v in m.group(1).split(",")}
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         classified = set(re.findall(r"Programming Language :: Python :: (\d+\.\d+)", pyproject))
@@ -235,8 +235,15 @@ class TestVerificationBlockClaims:
 
     @pytest.mark.slow
     def test_stated_test_count_is_current(self) -> None:
-        """Runs collection in a subprocess; the count includes this file."""
-        m = _find(r"pytest\s+(\d+) passed on")
+        """Runs collection in a subprocess; the count includes this file.
+
+        The README states the full-suite count, which includes the four
+        cross-validation tests. Those are not collected at all when the
+        `crossval` extra is absent, so without it this check would compare
+        against a smaller suite and fail for the wrong reason.
+        """
+        pytest.importorskip("statsmodels", reason="the stated count includes the crossval tests")
+        m = _find(r"pytest\s+(\d+) tests on")
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
             cwd=ROOT,
