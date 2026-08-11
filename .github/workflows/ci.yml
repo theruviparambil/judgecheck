@@ -1,0 +1,91 @@
+name: CI
+
+# Deliberately installs with the same `pip install -e ".[dev]"` the README tells
+# a new reader to run. If the documented path breaks, this goes red, which is
+# what keeps the README honest.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Type check
+        run: mypy
+
+      - name: Test
+        run: pytest
+
+  reproduction:
+    name: reproduces the reference implementation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+
+      # Called out as its own job so a break in the core claim of this package
+      # is legible in the checks list, not buried in a general test run.
+      - name: Reproduce the TypeScript panel numbers
+        run: pytest tests/test_reproduction.py tests/test_reproduction_report.py -v
+
+      - name: Determinism across hash seeds
+        run: pytest tests/test_determinism.py -v
+
+      - name: CLI smoke test
+        run: |
+          judgecheck report tests/data/panel-real
+          judgecheck report tests/data/panel-real --json > /dev/null
+          # this panel sits at kappa 0.135, so a 0.6 bar must fail with exit 1
+          if judgecheck report tests/data/panel-real --fail-under 0.6 > /dev/null; then
+            echo "::error::--fail-under 0.6 should have failed on a 0.135 panel"
+            exit 1
+          fi
+          judgecheck report tests/data/panel-real --fail-under 0.1 > /dev/null
+
+  mutation:
+    name: mutation sweep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+
+      # Proves the tests can actually fail. Roughly 20s: it runs the whole suite
+      # once per mutant. Exits nonzero if any mutant survives.
+      - name: Break the code on purpose
+        run: python scripts/mutation_sweep.py

@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "judgecheck"
+version = "0.1.0"
+description = "Validate LLM-as-judge reliability with inter-rater agreement, not accuracy."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Alexander Theruviparambil" }]
+keywords = ["llm", "eval", "evaluation", "llm-as-judge", "inter-rater-reliability", "kappa"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+# No runtime dependencies. The math is small enough for the standard library,
+# and a package that installs anywhere with nothing behind it is worth more
+# than one that pulls numpy to do arithmetic this simple.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "mypy>=1.11", "ruff>=0.6"]
+
+[project.scripts]
+judgecheck = "judgecheck.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/theruviparambil/judgecheck"
+Repository = "https://github.com/theruviparambil/judgecheck"
+Issues = "https://github.com/theruviparambil/judgecheck/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/judgecheck"]
+# Ships the PEP 561 marker so downstream type checkers actually see the
+# annotations. Without it the "Typing :: Typed" classifier is a lie.
+artifacts = ["src/judgecheck/py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "slow: spawns subprocesses (hash-seed determinism checks)",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+# scripts/ is checked too: mutation_sweep.py is imported by the README-claims
+# test, and a verification tool that is not itself verified is worth little.
+files = ["src/judgecheck", "tests", "scripts"]
+mypy_path = "scripts"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
