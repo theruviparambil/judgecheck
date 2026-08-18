@@ -180,10 +180,10 @@ ordinary dicts without adopting any types from this package.
 ## How it is verified
 
 ```
-pytest          150 tests on 3.10, 3.11, 3.12, 3.13
+pytest          159 tests on 3.10, 3.11, 3.12, 3.13
 mypy --strict   clean across src, tests, and scripts
 ruff            check and format clean
-mutation sweep  36/36 mutants killed
+mutation sweep  38/38 mutants killed
 cross-check     Fleiss, Krippendorff, 21 Cohen pairs vs third-party libraries
 
 Four of the 150 are the cross-validation tests and need the `crossval` extra;
@@ -222,6 +222,18 @@ green, it exposed four real defects:
 
 That is the honest limit of reproduction-as-a-test-suite: it proves you match
 the reference on the data you have, not that you handle the data you do not.
+
+A fifth defect arrived later, from an outside reviewer rather than from the
+sweep, and it is the most interesting one. A row like
+`{"findingId": 1, "label": "TP"}` loaded without complaint, because
+`json.loads` returns `Any` and the `str` annotation on `Judgment` is not
+enforced at runtime, so `mypy --strict` cannot see through that boundary. An
+`int` then sat in a mapping typed `str` until `sorted()` raised `TypeError` from
+four separate call sites. **Mutation testing was structurally incapable of
+finding it**: the sweep perturbs lines that exist, and what was missing was
+validation nobody had written. Types are now normalized at the loader, with the
+boundary tested directly. The lesson generalizes past this package: a mutation
+score says nothing about the code you forgot to write.
 
 ## Independently cross-checked
 

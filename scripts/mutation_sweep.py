@@ -171,8 +171,20 @@ MUTANTS: list[tuple[str, str, str, str]] = [
     (
         "io: malformed rows kept instead of skipped",
         "io.py",
-        "if not finding_id or not label:",
+        "if finding_id is None or label is None:",
         "if False:",
+    ),
+    (
+        "io: numeric ids not normalized to str at the boundary",
+        "io.py",
+        "    if isinstance(value, (int, float)):\n        return str(value)",
+        "    if isinstance(value, (int, float)):\n        return value  # type: ignore\n",
+    ),
+    (
+        "io: bool ids coerced instead of rejected",
+        "io.py",
+        "    if isinstance(value, bool):\n        return None",
+        "    if isinstance(value, bool):\n        pass",
     ),
     (
         "report: rounds the published floats",
