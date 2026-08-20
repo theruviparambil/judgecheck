@@ -20,6 +20,10 @@ from .types import LABELS, ConsensusEntry, Labels
 UNANIMOUS = "UNANIMOUS"
 MAJORITY = "MAJORITY"
 SPLIT = "SPLIT"
+#: No rater gave this item a label in the label set. Distinct from SPLIT: an
+#: item nobody voted on is not a disagreement, and counting it as one sends a
+#: human to adjudicate a blank row.
+UNSCORED = "UNSCORED"
 
 
 def consensus(
@@ -49,7 +53,13 @@ def consensus(
         if counts:
             top_label, top_n = counts.most_common(1)[0]
 
-        if voters > 0 and top_n == voters:
+        if voters == 0:
+            # Nobody cast a usable vote, so there is nothing to disagree about.
+            # This used to fall through to SPLIT and print under "contested
+            # items: these need human adjudication" with an empty vote list,
+            # inflating the split count with items no one had looked at.
+            kind, label = UNSCORED, None
+        elif top_n == voters:
             kind, label = UNANIMOUS, top_label
         elif top_n > voters / 2:
             kind, label = MAJORITY, top_label

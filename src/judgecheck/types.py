@@ -3,6 +3,13 @@
 Results are frozen dataclasses rather than dicts so the API is typed and
 introspectable. Inputs are plain `Mapping`s so callers can pass ordinary dicts
 without adopting our types.
+
+`frozen=True` here is shallow, as it is everywhere in Python. It stops you
+rebinding a field; it does not stop you mutating what a field points at, so
+`panel.raters["claude"]["new-item"] = "TP"` changes the panel and every
+statistic computed from it afterwards. These types are also unhashable for the
+same reason, because the generated `__hash__` reaches the `Mapping` inside.
+Treat them as read-only by convention rather than by enforcement.
 """
 
 from __future__ import annotations
@@ -107,16 +114,28 @@ class RaterValidity:
     """Of those calls, how many were truly positive."""
 
     @property
-    def recall(self) -> float:
-        return self.caught / self.truth_positives if self.truth_positives else 0.0
+    def recall(self) -> float | None:
+        """`None` when the truth basis holds no positives to catch.
+
+        Not 0.0. A rater that missed everything and a truth set with nothing to
+        miss are different situations, and `--positive-label OUT_OF_SCOPE` on a
+        panel with no OUT_OF_SCOPE verdicts printed `0/0 (0%)` for every judge,
+        which reads as total failure rather than as an empty question. The same
+        rule the agreement coefficients follow.
+        """
+        return self.caught / self.truth_positives if self.truth_positives else None
 
     @property
-    def precision(self) -> float:
-        return self.correct_calls / self.called if self.called else 0.0
+    def precision(self) -> float | None:
+        """`None` when the rater never used the positive label."""
+        return self.correct_calls / self.called if self.called else None
 
     @property
-    def f1(self) -> float:
+    def f1(self) -> float | None:
+        """`None` when either component is undefined, or both are zero."""
         p, r = self.precision, self.recall
+        if p is None or r is None:
+            return None
         return 2 * p * r / (p + r) if (p + r) else 0.0
 
 

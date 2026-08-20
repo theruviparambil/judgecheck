@@ -129,4 +129,8 @@ def test_reproduces_mean_pairwise_kappa(panel: Panel) -> None:
     got = mean_pairwise_kappa(dict(panel.raters))
     assert set(got) == set(EXPECTED_MEAN_PAIRWISE)
     for rater, exp in EXPECTED_MEAN_PAIRWISE.items():
-        assert round(got[rater], 3) == exp, f"{rater}: {got[rater]!r} != {exp}"
+        value = got[rater]
+        # None means no comparable pair; the real panel is complete, so every
+        # rater here has one, and a None would itself be the regression.
+        assert value is not None, f"{rater}: no comparable pair"
+        assert round(value, 3) == exp, f"{rater}: {value!r} != {exp}"

@@ -44,6 +44,20 @@ def _rater_list(raters: PanelLabels) -> list[Labels]:
     return list(raters)
 
 
+#: Interpretation for a coefficient computed over no comparable items. Not a
+#: band: it marks the absence of a measurement, so that a degenerate panel does
+#: not read as "poor" (which sounds like a finding) or "near perfect" (which
+#: sounds like a pass).
+UNDEFINED = "undefined (no comparable items)"
+
+#: The other degenerate case, and a different one: there were plenty of items,
+#: but every rating fell in a single category, so chance agreement is total and
+#: the coefficient is 0/0. Kept distinct from UNDEFINED because the two call
+#: for different fixes: one is a coverage problem, the other is a panel of
+#: raters that never discriminated.
+UNDEFINED_NO_VARIANCE = "undefined (all ratings in one category)"
+
+
 def interpret_kappa(k: float) -> str:
     """Readability bands, matching the reference implementation exactly.
 
@@ -86,7 +100,10 @@ def cohens_kappa(a: Labels, b: Labels, labels: Sequence[str] = LABELS) -> KappaR
         n += 1
 
     if n == 0:
-        return KappaResult(n=0, agreement=0.0, kappa=0.0, interpretation=interpret_kappa(0.0))
+        # No shared items. Not "poor" agreement, which reads as a finding; the
+        # two raters were never compared. `group_agreement` and
+        # `mean_pairwise_kappa` both skip these pairs for the same reason.
+        return KappaResult(n=0, agreement=0.0, kappa=0.0, interpretation=UNDEFINED)
 
     agreed = sum(matrix[i][i] for i in range(k))
     p_o = agreed / n
@@ -97,7 +114,14 @@ def cohens_kappa(a: Labels, b: Labels, labels: Sequence[str] = LABELS) -> KappaR
         col = sum(matrix[j][i] for j in range(k))
         p_e += (row / n) * (col / n)
 
-    kappa = 1.0 if p_e == 1 else (p_o - p_e) / (1 - p_e)
+    if p_e >= 1:
+        # Every rating fell in one category, so chance agreement is total and
+        # kappa is 0/0. Reporting 1.0 "near perfect" here is the single worst
+        # thing this module can do: two raters who both say TP to everything
+        # are the textbook case kappa exists to catch, and 1.0 clears any
+        # --fail-under. No variance is not perfect agreement.
+        return KappaResult(n=n, agreement=p_o, kappa=0.0, interpretation=UNDEFINED_NO_VARIANCE)
+    kappa = (p_o - p_e) / (1 - p_e)
     return KappaResult(n=n, agreement=p_o, kappa=kappa, interpretation=interpret_kappa(kappa))
 
 
@@ -150,13 +174,18 @@ def fleiss_kappa(raters: PanelLabels, labels: Sequence[str] = LABELS) -> MultiRa
         used_items += 1
 
     if used_items == 0 or total_assignments == 0:
-        return MultiRaterResult(
-            n=0, raters=len(rater_list), value=0.0, interpretation=interpret_kappa(0.0)
-        )
+        return MultiRaterResult(n=0, raters=len(rater_list), value=0.0, interpretation=UNDEFINED)
 
     p_bar = p_bar_sum / used_items
     p_e = sum((c / total_assignments) ** 2 for c in category_totals)
-    value = 1.0 if p_e >= 1 else (p_bar - p_e) / (1 - p_e)
+    if p_e >= 1:
+        # As in cohens_kappa: one category used everywhere means kappa is 0/0,
+        # not 1.0. A panel of rubber stamps scored "near perfect" and passed
+        # --fail-under 0.9 while triage flagged every one of its raters DROP.
+        return MultiRaterResult(
+            n=used_items, raters=len(rater_list), value=0.0, interpretation=UNDEFINED_NO_VARIANCE
+        )
+    value = (p_bar - p_e) / (1 - p_e)
     return MultiRaterResult(
         n=used_items, raters=len(rater_list), value=value, interpretation=interpret_kappa(value)
     )
@@ -209,8 +238,14 @@ def krippendorff_alpha(raters: PanelLabels, labels: Sequence[str] = LABELS) -> M
     n_c = [sum(o[c]) for c in range(k)]
     n = sum(n_c)
     if used_items == 0 or n <= 1:
+        # 0.0 with an explicit UNDEFINED, not 1.0. Alpha's limit here really is
+        # 1.0 by its own algebra, but Fleiss reports 0.0 on the identical input,
+        # so the two coefficients disagreed by a full unit on no data, printed
+        # three lines apart. Worse, an alpha of 1.0 clears any --fail-under, so
+        # a panel with nothing in it passed on one coefficient. Neither number
+        # is a measurement; saying so is better than picking a side.
         return MultiRaterResult(
-            n=used_items, raters=len(rater_list), value=1.0, interpretation=interpret_kappa(1.0)
+            n=used_items, raters=len(rater_list), value=0.0, interpretation=UNDEFINED
         )
 
     do_sum = 0.0
@@ -222,7 +257,15 @@ def krippendorff_alpha(raters: PanelLabels, labels: Sequence[str] = LABELS) -> M
             do_sum += o[c][j]
             de_sum += n_c[c] * n_c[j]
 
-    value = 1.0 if de_sum == 0 else 1 - (n - 1) * (do_sum / de_sum)
+    if de_sum == 0:
+        # Expected disagreement is zero because only one category appears. The
+        # `krippendorff` package raises here ("There has to be more than one
+        # value in the domain") rather than returning 1.0, which is the same
+        # judgement reached a different way.
+        return MultiRaterResult(
+            n=used_items, raters=len(rater_list), value=0.0, interpretation=UNDEFINED_NO_VARIANCE
+        )
+    value = 1 - (n - 1) * (do_sum / de_sum)
     return MultiRaterResult(
         n=used_items, raters=len(rater_list), value=value, interpretation=interpret_kappa(value)
     )
@@ -243,15 +286,24 @@ def pairwise_kappa(
 
 def mean_pairwise_kappa(
     raters: Mapping[str, Labels], labels: Sequence[str] = LABELS
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     """Per-rater mean of its Cohen's kappa against every other rater.
 
     Not a panel statistic. It answers "does this rater agree with everyone?",
     which flags a rater adding little independent signal.
+
+    Pairs with no shared items are skipped rather than averaged in as 0.0.
+    Including them was a real defect: a rater that agrees perfectly with the one
+    other rater it overlaps reported 0.5 because a third, disjoint rater
+    contributed an undefined 0.0. `None` when a rater has no comparable pair at
+    all, because "agrees with nobody" and "was never compared" are different
+    facts and only one of them is about the rater.
     """
     pairs = pairwise_kappa(raters, labels)
     sums: dict[str, list[float]] = {name: [] for name in raters}
     for (a, b), res in pairs.items():
+        if res.n == 0:
+            continue
         sums[a].append(res.kappa)
         sums[b].append(res.kappa)
-    return {name: (sum(v) / len(v) if v else 0.0) for name, v in sums.items()}
+    return {name: (sum(v) / len(v) if v else None) for name, v in sums.items()}

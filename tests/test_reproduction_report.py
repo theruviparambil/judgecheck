@@ -114,6 +114,7 @@ def test_reproduces_triage(panel: Panel) -> None:
         assert t.distribution["FP"] == fp, f"{rater} FP"
         assert t.distribution["NEEDS_INVESTIGATION"] == ni, f"{rater} NI"
         assert t.distribution["OUT_OF_SCOPE"] == oos, f"{rater} OOS"
+        assert t.abstention is not None, f"{rater} abstention"
         assert round(t.abstention * 100) == ni_pct, f"{rater} NI%"
         assert t.agreement_with_truth is not None
         assert round(t.agreement_with_truth * 100) == acc_pct, f"{rater} accuracy"

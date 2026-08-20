@@ -20,12 +20,14 @@ enforced there even when a local run skips.
 from __future__ import annotations
 
 import itertools
+import random
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from judgecheck.agreement import cohens_kappa, fleiss_kappa, krippendorff_alpha
+from judgecheck.independence import _largest_eigenvalue
 from judgecheck.io import load_panel
 from judgecheck.types import LABELS, Panel
 
@@ -142,3 +144,153 @@ def test_a_rubber_stamp_rater_scores_near_zero_in_both(category_index: dict[str,
         matrix[category_index[truthy[item]], category_index[rubber_stamp[item]]] += 1
     theirs = float(inter_rater.cohens_kappa(matrix).kappa)
     assert abs(result.kappa - theirs) <= EXACT
+
+
+#: A deliberately incomplete panel: raters skip different items, so the number
+#: of raters per item varies. Module level rather than a class attribute so it
+#: is not a mutable default (RUF012).
+INCOMPLETE = {
+    "a": {"i1": "TP", "i2": "FP", "i3": "TP", "i4": "FP", "i5": "TP"},
+    "b": {"i1": "TP", "i2": "TP", "i3": "TP", "i5": "FP"},
+    "c": {"i1": "FP", "i3": "TP", "i4": "FP", "i5": "TP"},
+    "d": {"i1": "TP", "i2": "FP", "i4": "FP"},
+}
+TWO_LABELS = ("TP", "FP")
+
+
+class TestIncompleteData:
+    """The abstention-tolerant path, which the real panel never exercises.
+
+    Every rater in `panel-real` labeled every item, so the reproduction and the
+    cross-checks above only ever validate the complete-data case. The
+    generalizations that tolerate a rater skipping an item are exactly where
+    independent implementations legitimately diverge, and until this class they
+    were checked only against the TypeScript harness, which shares an author.
+
+    Krippendorff's alpha is designed for missing data, so the `krippendorff`
+    package validates that path directly. Fleiss' kappa is not: statsmodels
+    refuses unequal raters-per-item rather than computing a generalization, so
+    that branch has no third-party check and the README says so.
+    """
+
+    def _matrix(self) -> Any:
+        """Raters x items, NaN for "this rater did not label this item".
+
+        Returns `Any` rather than `np.ndarray` because numpy is an optional
+        extra here and a module-scope import would break the base install.
+        """
+        import numpy as np
+
+        items = sorted({i for r in INCOMPLETE.values() for i in r})
+        index = {lbl: i for i, lbl in enumerate(TWO_LABELS)}
+        m = np.full((len(INCOMPLETE), len(items)), np.nan)
+        for ri, name in enumerate(sorted(INCOMPLETE)):
+            for ci, item in enumerate(items):
+                value = INCOMPLETE[name].get(item)
+                if value in index:
+                    m[ri, ci] = index[value]
+        return m
+
+    def test_the_panel_really_is_incomplete(self) -> None:
+        """Otherwise this class silently re-tests the complete-data path."""
+        items = sorted({i for r in INCOMPLETE.values() for i in r})
+        counts = [sum(1 for r in INCOMPLETE.values() if i in r) for i in items]
+        assert len(set(counts)) > 1, "raters-per-item must vary for this to mean anything"
+
+    def test_krippendorff_alpha_matches_the_package_on_missing_data(self) -> None:
+        krippendorff = pytest.importorskip("krippendorff")
+        mine = krippendorff_alpha(INCOMPLETE, TWO_LABELS).value
+        theirs = krippendorff.alpha(reliability_data=self._matrix(), level_of_measurement="nominal")
+        assert mine == pytest.approx(theirs, abs=1e-12)
+
+    def test_statsmodels_declines_this_input_rather_than_disagreeing(self) -> None:
+        """Pinned so the README's stated limit stays true.
+
+        If a future statsmodels grows support for unequal raters-per-item, this
+        fails and the README claim needs revisiting rather than silently
+        becoming understated.
+        """
+        np = pytest.importorskip("numpy")
+        sm = pytest.importorskip("statsmodels.stats.inter_rater")
+        items = sorted({i for r in INCOMPLETE.values() for i in r})
+        table = np.array(
+            [
+                [sum(1 for r in INCOMPLETE.values() if r.get(i) == lbl) for lbl in TWO_LABELS]
+                for i in items
+            ]
+        )
+        assert len({int(row.sum()) for row in table}) > 1
+        with pytest.raises(AssertionError):
+            sm.fleiss_kappa(table)
+
+
+#: Eigenvalue cases, module level so it is not a mutable class attribute (RUF012).
+EIGEN_CASES = {
+    "dominant negative eigenvalue": [[-1.0, -3.0], [-3.0, -1.0]],
+    "equicorrelation, ones is an eigenvector": [
+        [1.0, 0.5, 0.5, 0.5],
+        [0.5, 1.0, 0.5, 0.5],
+        [0.5, 0.5, 1.0, 0.5],
+        [0.5, 0.5, 0.5, 1.0],
+    ],
+    "identity": [[1.0, 0.0], [0.0, 1.0]],
+    "negative equicorrelation": [
+        [1.0, -0.3, -0.3],
+        [-0.3, 1.0, -0.3],
+        [-0.3, -0.3, 1.0],
+    ],
+    "single rater": [[1.0]],
+}
+
+
+class TestEigenvalue:
+    """`_largest_eigenvalue` is hand-rolled, so it gets checked against numpy.
+
+    The package has no runtime dependencies and one eigenvalue does not justify
+    acquiring one, but a hand-rolled numerical routine with no external check is
+    exactly the thing this file exists to prevent. numpy is already a test-only
+    extra here.
+
+    The first two cases are the ones that broke the first implementation: a
+    matrix whose dominant eigenvalue is negative, and an equicorrelation matrix
+    whose eigenvector is the vector of ones the iteration started from.
+    """
+
+    @pytest.mark.parametrize("name", sorted(EIGEN_CASES))
+    def test_matches_numpy(self, name: str) -> None:
+        np = pytest.importorskip("numpy")
+        matrix = EIGEN_CASES[name]
+        expected = float(np.linalg.eigvalsh(np.array(matrix)).max())
+        assert _largest_eigenvalue(matrix) == pytest.approx(expected, abs=1e-9)
+
+    @pytest.mark.parametrize("k", [5, 7, 9])
+    def test_matches_numpy_on_random_correlation_matrices(self, k: int) -> None:
+        np = pytest.importorskip("numpy")
+        rng = random.Random(k)
+        matrix = [[1.0] * k for _ in range(k)]
+        for i in range(k):
+            for j in range(i + 1, k):
+                matrix[i][j] = matrix[j][i] = rng.uniform(-0.9, 0.9)
+        expected = float(np.linalg.eigvalsh(np.array(matrix)).max())
+        assert _largest_eigenvalue(matrix) == pytest.approx(expected, abs=1e-9)
+
+    def test_the_real_panel_matrix(self) -> None:
+        """The value the report actually publishes."""
+        np = pytest.importorskip("numpy")
+        from itertools import combinations
+
+        from judgecheck.independence import _error_vectors, _phi
+
+        panel = load_panel(PANEL_DIR)
+        assert panel.truth is not None
+        names = sorted(panel.raters)
+        matrix = [[1.0 if i == j else 0.0 for j in names] for i in names]
+        for i, j in combinations(range(len(names)), 2):
+            ea, eb = _error_vectors(
+                panel.raters[names[i]], panel.raters[names[j]], panel.truth, frozenset(LABELS)
+            )
+            value = _phi(ea, eb)
+            if value is not None:
+                matrix[i][j] = matrix[j][i] = value
+        expected = float(np.linalg.eigvalsh(np.array(matrix)).max())
+        assert _largest_eigenvalue(matrix) == pytest.approx(expected, abs=1e-9)

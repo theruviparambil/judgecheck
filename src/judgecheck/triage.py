@@ -30,6 +30,16 @@ from .validity import accuracy
 SKEW_THRESHOLD = 0.8
 #: NEEDS_INVESTIGATION may not exceed this share.
 ABSTENTION_THRESHOLD = 0.4
+#: The label treated as "the rater declined to decide". Two signals, the
+#: abstention rate and the strict/lenient split, are defined in terms of it and
+#: of TP/FP. Under a custom `--labels` set none of those names exist, and the
+#: `Counter` behind `distribution` returns 0 for a missing key, so both signals
+#: silently reported 0.0 and "balanced" as if measured. They are now reported as
+#: `None` and UNKNOWN, because a label set this code cannot interpret is not the
+#: same as a rater with nothing to declare.
+ABSTENTION_LABEL = "NEEDS_INVESTIGATION"
+POSITIVE_LABEL = "TP"
+NEGATIVE_LABEL = "FP"
 #: Exact-match agreement with truth below this is flagged.
 ACCURACY_THRESHOLD = 0.6
 #: Pairwise kappa at or above this means the pair is redundant.
@@ -45,8 +55,12 @@ class RaterTriage:
     rater: str
     labeled: int
     distribution: Mapping[str, int]
-    abstention: float
-    """Share of this rater's labels that are NEEDS_INVESTIGATION."""
+    abstention: float | None
+    """Share of this rater's labels that are NEEDS_INVESTIGATION.
+
+    `None` when the label set has no abstention label, in which case there is
+    no such share to report rather than a share of zero.
+    """
     agreement_with_truth: float | None
     """Exact-match share, or None when no truth basis covers this rater."""
     mean_redundancy: float
@@ -91,11 +105,16 @@ def triage(
         dist = Counter({lbl: 0 for lbl in labels})
         dist.update(rater_labels.values())
 
-        abstention = (dist["NEEDS_INVESTIGATION"] / labeled) if labeled else 0.0
+        abstention: float | None = None
+        if ABSTENTION_LABEL in allowed and labeled:
+            # `labeled == 0` means this rater produced no in-set label at all.
+            # 0.0 would claim it abstained on none of them, which is a
+            # measurement; there was nothing to measure.
+            abstention = dist[ABSTENTION_LABEL] / labeled
 
         agree: float | None = None
         if truth:
-            agreed, evaluated = accuracy(rater_labels, truth)
+            agreed, evaluated = accuracy(rater_labels, truth, labels)
             agree = (agreed / evaluated) if evaluated else None
 
         others = redundancy[name]
@@ -114,13 +133,16 @@ def triage(
                 f"SKEWED ({max_share * 100:.0f}% {max_label}): low discriminating power; "
                 "likely rubber-stamping the description"
             )
-        if abstention > ABSTENTION_THRESHOLD:
+        if abstention is not None and abstention > ABSTENTION_THRESHOLD:
             flags.append(
                 f"ABSTAINS ({abstention * 100:.0f}% NI): its NI votes carry no TP/FP signal; "
                 "treat NI as abstention, or drop"
             )
         if agree is not None and agree < ACCURACY_THRESHOLD:
-            basis = "adjudicated truth" if truth else "majority"
+            # `agree` is only set when truth is present, so the basis is
+            # never anything else. The old conditional implied a majority-vote
+            # fallback this function does not have.
+            basis = "adjudicated truth"
             flags.append(
                 f"LOW ACCURACY ({agree * 100:.0f}% vs {basis}): diverges from the truth basis; "
                 "down-weight"
@@ -148,6 +170,9 @@ def triage(
 LENIENT = "LENIENT (over-calls TP)"
 STRICT = "STRICT (FP/NI)"
 BALANCED = "balanced"
+#: The label set has no TP/FP axis, so no leaning can be read off it. Distinct
+#: from BALANCED, which is a measurement.
+UNKNOWN = "not interpretable for this label set"
 LEAN_THRESHOLD = 0.7
 
 
@@ -175,10 +200,14 @@ def split_leaning(
                 counts[lbl] += 1
                 total += 1
 
-        leaning = BALANCED
-        if total > 0:
-            tp_share = counts.get("TP", 0) / total
-            strict_share = (counts.get("FP", 0) + counts.get("NEEDS_INVESTIGATION", 0)) / total
+        # The lenient/strict axis is defined by TP against FP-or-abstain. With a
+        # custom label set those names are absent, so there is no axis to place
+        # the rater on and "balanced" would be a fabricated reading.
+        interpretable = POSITIVE_LABEL in allowed and NEGATIVE_LABEL in allowed
+        leaning = BALANCED if interpretable else UNKNOWN
+        if total > 0 and interpretable:
+            tp_share = counts.get(POSITIVE_LABEL, 0) / total
+            strict_share = (counts.get(NEGATIVE_LABEL, 0) + counts.get(ABSTENTION_LABEL, 0)) / total
             if tp_share >= LEAN_THRESHOLD:
                 leaning = LENIENT
             elif strict_share >= LEAN_THRESHOLD:

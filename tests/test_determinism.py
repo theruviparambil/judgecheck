@@ -31,15 +31,28 @@ from judgecheck.io import load_panel
 from judgecheck.report import build_report, check_gate, to_json
 
 panel = load_panel(sys.argv[1])
-report = build_report(panel)
+
+# intervals=True on purpose. The report now contains two Monte Carlo
+# procedures, a 1000-draw bootstrap and a 2000-draw permutation test, and both
+# are the obvious way to break a bit-identical guarantee. `uncertainty.py`
+# cites this file as the reason its seed is fixed, and until this line the
+# probe ran with intervals off, so the citation described a test that did not
+# exist.
+report = build_report(panel, intervals=True)
 
 # The entire report, not a hand-picked subset: triage carries floats too, and a
 # probe that only checked the headline numbers would have missed them.
-payload = to_json(report, check_gate(report, 0.2))
+payload = to_json(report, check_gate(report, 0.2, 2.0))
 print(json.dumps({
     "sha256": hashlib.sha256(payload.encode()).hexdigest(),
     "fleiss": repr(report.fleiss.value),
     "krippendorff": repr(report.krippendorff.value),
+    "permutation_p": repr(report.coincidence.p_value if report.coincidence else None),
+    "interval_low": repr(
+        report.intervals.effective_raters.low
+        if report.intervals and report.intervals.effective_raters
+        else None
+    ),
     "bytes": len(payload),
 }, sort_keys=True))
 """

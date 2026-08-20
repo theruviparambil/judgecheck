@@ -11,7 +11,13 @@ from __future__ import annotations
 
 import pytest
 
-from judgecheck import cohens_kappa, fleiss_kappa, interpret_kappa, krippendorff_alpha
+from judgecheck import (
+    UNDEFINED,
+    cohens_kappa,
+    fleiss_kappa,
+    interpret_kappa,
+    krippendorff_alpha,
+)
 
 TWO = ("TP", "FP")
 
@@ -97,9 +103,25 @@ class TestKrippendorffAlpha:
         assert krippendorff_alpha([a, dict(a)], TWO).value == pytest.approx(1.0)
 
     def test_empty_panel_is_degenerate_not_a_crash(self) -> None:
+        """And reports undefined rather than 1.0.
+
+        Alpha's own algebra does tend to 1.0 on no data, but Fleiss reports 0.0
+        on the identical input, and the two printed three lines apart in the
+        same report disagreeing by a full unit. An alpha of 1.0 also clears any
+        `--fail-under`, so a panel containing nothing passed on one coefficient.
+        Both now say the same thing: there was no measurement.
+        """
         r = krippendorff_alpha([{}, {}], TWO)
         assert r.n == 0
-        assert r.value == 1.0
+        assert r.value == 0.0
+        assert r.interpretation == UNDEFINED
+
+    def test_the_two_panel_coefficients_agree_on_degenerate_input(self) -> None:
+        """The gate's stated rationale is that a disagreement is worth catching."""
+        alpha = krippendorff_alpha([{}, {}], TWO)
+        fleiss = fleiss_kappa([{}, {}], TWO)
+        assert alpha.value == fleiss.value
+        assert alpha.interpretation == fleiss.interpretation == UNDEFINED
 
 
 class TestInterpretation:

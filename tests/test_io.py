@@ -13,6 +13,7 @@ the bad line and keeps the rest of the rater; these tests pin that.
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import pytest
@@ -140,10 +141,14 @@ class TestLoadPanel:
     def test_truth_json_is_not_mistaken_for_a_rater(self, tmp_path: Path) -> None:
         _write(tmp_path / "alpha.jsonl", [_row("f1", "TP")])
         (tmp_path / "truth.json").write_text(json.dumps({"verdicts": []}), encoding="utf-8")
-        assert load_panel(tmp_path).rater_names == ("alpha",)
+        # An empty verdict list is a truth file that yielded nothing, which now
+        # warns; this test is about rater discovery, not about that.
+        with pytest.warns(UserWarning, match="no usable verdicts"):
+            assert load_panel(tmp_path).rater_names == ("alpha",)
 
     def test_a_directory_with_no_raters_raises(self, tmp_path: Path) -> None:
         (tmp_path / "truth.json").write_text(json.dumps({"verdicts": []}), encoding="utf-8")
+        # Raises before the truth file is read, so no warning here.
         with pytest.raises(FileNotFoundError, match="no rater"):
             load_panel(tmp_path)
 
@@ -249,3 +254,102 @@ class TestBoundaryTypeNormalization:
             encoding="utf-8",
         )
         assert load_truth(t) == {"1": "TP", "f-3": "FP"}
+
+
+class TestOptionalFieldNormalization:
+    """The annotation fields are validated too, not just id and label.
+
+    `confidence`, `reasoning`, `model` and `vendor` came straight off
+    `json.loads` with no check, so `Judgment` promised `int | None` and
+    `str | None` and delivered whatever the file held. That was survivable
+    while nothing read them. `vendor` is now the default grouping key for
+    panel independence, so a dict in that field would have travelled from a
+    malformed line into a grouping and failed somewhere unrelated.
+
+    Nothing is coerced here, unlike ids. These fields are descriptive: a
+    number in `vendor` means the row is not what we think it is, and turning
+    it into `"1"` would hide that instead of surfacing it.
+    """
+
+    def test_a_structured_vendor_is_dropped_not_carried(self, tmp_path: Path) -> None:
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", vendor={"name": "Anthropic"})])
+        assert load_judgments(p)[0].vendor is None
+
+    def test_a_numeric_vendor_is_dropped_rather_than_stringified(self, tmp_path: Path) -> None:
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", vendor=7)])
+        assert load_judgments(p)[0].vendor is None
+
+    def test_vendor_and_model_are_stripped(self, tmp_path: Path) -> None:
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", vendor="  Anthropic  ", model=" c ")])
+        j = load_judgments(p)[0]
+        assert (j.vendor, j.model) == ("Anthropic", "c")
+
+    def test_an_empty_vendor_becomes_none_not_an_empty_group(self, tmp_path: Path) -> None:
+        """An empty string would otherwise become a group named "" in the report."""
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", vendor="   ")])
+        assert load_judgments(p)[0].vendor is None
+
+    def test_a_non_string_reasoning_is_dropped(self, tmp_path: Path) -> None:
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", reasoning=["a", "b"])])
+        assert load_judgments(p)[0].reasoning is None
+
+    def test_an_integer_confidence_survives(self, tmp_path: Path) -> None:
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", confidence=4)])
+        assert load_judgments(p)[0].confidence == 4
+
+    def test_a_boolean_confidence_is_rejected_not_coerced_to_one(self, tmp_path: Path) -> None:
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", confidence=True)])
+        assert load_judgments(p)[0].confidence is None
+
+    def test_an_integral_float_confidence_is_accepted(self, tmp_path: Path) -> None:
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", confidence=4.0)])
+        assert load_judgments(p)[0].confidence == 4
+
+    def test_a_fractional_confidence_is_dropped_rather_than_rounded(self, tmp_path: Path) -> None:
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", confidence=4.5)])
+        assert load_judgments(p)[0].confidence is None
+
+    def test_a_bad_optional_field_does_not_lose_the_row(self, tmp_path: Path) -> None:
+        """id and label are what the statistics need; a junk annotation is not fatal."""
+        p = _write(tmp_path / "r.jsonl", [_row("f1", "TP", vendor={"x": 1}, confidence="high")])
+        j = load_judgments(p)[0]
+        assert (j.finding_id, j.label) == ("f1", "TP")
+
+
+class TestTruthThatYieldsNothing:
+    """A `truth.json` that exists but parses to nothing used to vanish silently.
+
+    `load_truth` is deliberately tolerant, so a top-level list or a key spelled
+    `verdict` returns `{}`. But `{}` is falsy, so downstream it was
+    indistinguishable from "there is no truth file", and the validity,
+    independence and coincident-error sections disappeared from the report on a
+    zero exit with nothing said. Tolerance is right; silence was not.
+    """
+
+    def _panel(self, tmp_path: Path, truth: str) -> Path:
+        _write(tmp_path / "a.jsonl", [_row("f1", "TP")])
+        (tmp_path / "truth.json").write_text(truth, encoding="utf-8")
+        return tmp_path
+
+    def test_a_misspelled_verdicts_key_warns(self, tmp_path: Path) -> None:
+        p = self._panel(tmp_path, json.dumps({"verdict": [{"findingId": "f1", "label": "TP"}]}))
+        with pytest.warns(UserWarning, match="no usable verdicts"):
+            load_panel(p)
+
+    def test_a_top_level_list_warns(self, tmp_path: Path) -> None:
+        p = self._panel(tmp_path, json.dumps([{"findingId": "f1", "label": "TP"}]))
+        with pytest.warns(UserWarning, match="no usable verdicts"):
+            load_panel(p)
+
+    def test_a_well_formed_truth_file_does_not_warn(self, tmp_path: Path) -> None:
+        p = self._panel(tmp_path, json.dumps({"verdicts": [{"findingId": "f1", "label": "TP"}]}))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert load_panel(p).truth == {"f1": "TP"}
+
+    def test_no_truth_file_at_all_is_silent(self, tmp_path: Path) -> None:
+        """Absence is not a data problem, so it must not warn."""
+        _write(tmp_path / "a.jsonl", [_row("f1", "TP")])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert load_panel(tmp_path).truth is None

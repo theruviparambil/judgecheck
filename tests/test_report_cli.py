@@ -19,8 +19,14 @@ from typing import Any
 import pytest
 
 from judgecheck import load_panel
+from judgecheck.agreement import mean_pairwise_kappa
 from judgecheck.cli import main
+from judgecheck.consensus import UNSCORED, consensus, split_items
+from judgecheck.io import load_judgments, load_truth
 from judgecheck.report import build_report, check_gate, render_text, to_dict, to_json
+from judgecheck.triage import BALANCED, LENIENT, UNKNOWN, split_leaning, triage
+from judgecheck.types import LABELS, Panel
+from judgecheck.validity import accuracy, validity
 
 PANEL_DIR = Path(__file__).parent / "data" / "panel-real"
 
@@ -74,7 +80,7 @@ class TestReportContent:
     def test_consensus_counts_sum_to_the_item_count(self, report_dict: dict[str, Any]) -> None:
         counts = report_dict["consensus"]["counts"]
         assert sum(counts.values()) == 23
-        assert counts == {"UNANIMOUS": 1, "MAJORITY": 19, "SPLIT": 3}
+        assert counts == {"UNANIMOUS": 1, "MAJORITY": 19, "SPLIT": 3, "UNSCORED": 0}
 
     def test_validity_matches_the_reference_harness(self, report_dict: dict[str, Any]) -> None:
         expected = {
@@ -304,4 +310,227 @@ class TestGateCli:
     ) -> None:
         """A missing panel is exit 2, not exit 1: you cannot gate what you cannot read."""
         assert main(["report", str(tmp_path / "nope"), "--fail-under", "0.9"]) == 2
+        assert "error:" in capsys.readouterr().err
+
+
+class TestInputErrorsExitTwo:
+    """The exit-code table promises 2 for "usage or input error".
+
+    Only `FileNotFoundError` was caught, so a corrupt `truth.json`, a rater path
+    that is a directory, and a non-UTF-8 file each reached the user as a
+    traceback while a sibling test asserted that a *missing* directory did not.
+    """
+
+    def _raters(self, d: Path) -> None:
+        (d / "a.jsonl").write_text('{"findingId": "f1", "label": "TP"}\n', encoding="utf-8")
+
+    def test_a_corrupt_truth_file(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        self._raters(tmp_path)
+        (tmp_path / "truth.json").write_text('{"verdicts": [', encoding="utf-8")
+        assert main(["report", str(tmp_path)]) == 2
+        assert "error:" in capsys.readouterr().err
+
+    def test_a_rater_path_that_is_a_directory(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "a.jsonl").mkdir()
+        assert main(["report", str(tmp_path)]) == 2
+        assert "error:" in capsys.readouterr().err
+
+    def test_a_non_utf8_rater_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "a.jsonl").write_bytes(b"\xff\xfe\x00bad")
+        assert main(["report", str(tmp_path)]) == 2
+        assert "error:" in capsys.readouterr().err
+
+    def test_a_missing_directory_still_exits_two(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["report", str(tmp_path / "nope")]) == 2
+        assert "error:" in capsys.readouterr().err
+
+
+class TestDegenerateInputIsNotReportedAsAMeasurement:
+    """Guards for output that used to be confidently wrong rather than absent.
+
+    Each of these produced a plausible number from no evidence: a contested
+    item nobody had voted on, an abstention rate for a label set with no
+    abstention label, a lenient/strict reading with no TP/FP axis to read it on.
+    """
+
+    def test_an_item_nobody_voted_on_is_unscored_not_split(self) -> None:
+        entries = consensus({"a": {"x": "BOGUS"}, "b": {"x": "ALSO_BOGUS"}})
+        assert entries[0].consensus == UNSCORED
+        assert entries[0].consensus_label is None
+        assert split_items(entries) == ()
+
+    def test_unscored_items_do_not_appear_as_needing_adjudication(self) -> None:
+        raters = {"a": {"x": "BOGUS"}, "b": {"y": "TP"}}
+        text = render_text(build_report(Panel(name="p", raters=raters)))
+        assert "contested items" not in text
+
+    def test_abstention_is_none_for_a_label_set_without_an_abstention_label(self) -> None:
+        raters = {"x": {f"i{i}": ("UNSURE" if i else "GOOD") for i in range(10)}}
+        t = triage(raters, None, ("GOOD", "BAD", "UNSURE"))["x"]
+        assert t.abstention is None
+        assert not any("ABSTAINS" in f for f in t.flags)
+
+    def test_abstention_still_measured_for_the_standard_label_set(self) -> None:
+        raters = {"x": {f"i{i}": ("NEEDS_INVESTIGATION" if i else "TP") for i in range(10)}}
+        t = triage(raters, None, LABELS)["x"]
+        assert t.abstention == pytest.approx(0.9)
+        assert any("ABSTAINS" in f for f in t.flags)
+
+    def test_leaning_is_not_reported_as_balanced_without_a_tp_fp_axis(self) -> None:
+        raters = {"x": {"i1": "GOOD", "i2": "BAD"}}
+        got = split_leaning(raters, ("i1", "i2"), ("GOOD", "BAD"))["x"][1]
+        assert got == UNKNOWN
+        assert got != BALANCED
+
+    def test_leaning_still_measured_for_the_standard_label_set(self) -> None:
+        raters = {"x": {"i1": "TP", "i2": "TP", "i3": "TP"}}
+        assert split_leaning(raters, ("i1", "i2", "i3"), LABELS)["x"][1] == LENIENT
+
+    def test_an_unmeasurable_abstention_renders_as_a_dash_not_a_zero(self) -> None:
+        raters = {"x": {"i1": "GOOD", "i2": "BAD"}, "y": {"i1": "GOOD", "i2": "GOOD"}}
+        panel = Panel(name="p", raters=raters)
+        text = render_text(build_report(panel, labels=("GOOD", "BAD"), positive_label="GOOD"))
+        triage_rows = [
+            line
+            for line in text.split("RATER TRIAGE")[1].split("\n")
+            if line.startswith("  x ") or line.startswith("  y ")
+        ]
+        assert triage_rows, text
+        assert all("0%" not in row for row in triage_rows), triage_rows
+
+
+class TestUndefinedValidityIsNotZero:
+    """`0/0 (0%)` read as total failure where the question was simply empty."""
+
+    def test_no_truth_positives_gives_none_not_zero(self) -> None:
+        raters = {"a": {"i1": "TP", "i2": "FP"}}
+        got = validity(raters, {"i1": "FP", "i2": "FP"}, positive_label="TP")["a"]
+        assert got.truth_positives == 0
+        assert got.recall is None
+
+    def test_no_calls_made_gives_none_precision(self) -> None:
+        raters = {"a": {"i1": "FP", "i2": "FP"}}
+        got = validity(raters, {"i1": "TP", "i2": "TP"}, positive_label="TP")["a"]
+        assert got.called == 0
+        assert got.precision is None
+        assert got.f1 is None
+
+    def test_a_real_score_is_still_a_number(self) -> None:
+        raters = {"a": {"i1": "TP", "i2": "FP"}}
+        got = validity(raters, {"i1": "TP", "i2": "TP"}, positive_label="TP")["a"]
+        assert got.recall == pytest.approx(0.5)
+        assert got.precision == pytest.approx(1.0)
+        assert got.f1 == pytest.approx(2 / 3)
+
+    def test_the_renderer_prints_a_dash(self) -> None:
+        text = render_text(build_report(load_panel(PANEL_DIR), positive_label="OUT_OF_SCOPE"))
+        block = text.split("VALIDITY")[1].split("CONSENSUS")[0]
+        assert "(-)" in block
+        assert "(0%)" not in block
+
+    def test_rater_validity_carries_its_own_name(self) -> None:
+        """It used to return `rater=""` and let `validity()` hand-copy six fields."""
+        got = validity({"claude": {"i1": "TP"}}, {"i1": "TP"})["claude"]
+        assert got.rater == "claude"
+
+    def test_build_report_rejects_a_positive_label_outside_the_set(self) -> None:
+        """The CLI checked this; a library caller got a table of zeros."""
+        with pytest.raises(ValueError, match="not in the label set"):
+            build_report(load_panel(PANEL_DIR), positive_label="NOPE")
+
+
+class TestGuardsTheThirdSweepFound:
+    """Defects an outside reviewer found that the suite did not.
+
+    Each of these produced a confident wrong answer rather than a crash, and
+    each sits on a path the complete 7x23 fixture cannot reach.
+    """
+
+    def test_a_zero_threshold_does_not_pass_an_undefined_panel(self) -> None:
+        """`--fail-under 0.0` passed a panel the report calls undefined.
+
+        Both degenerate branches return value 0.0, which is right, and the gate
+        read only `.value`. So a report printing "undefined (all ratings in one
+        category)" three sections above still exited 0 against a floor of zero.
+        """
+        items = [f"i{i}" for i in range(23)]
+        stampers = {f"r{j}": dict.fromkeys(items, "TP") for j in range(7)}
+        report = build_report(Panel(name="s", raters=stampers, truth=dict.fromkeys(items, "TP")))
+        gate = check_gate(report, 0.0)
+        assert not gate.passed
+        assert "undefined" in gate.failures[0]
+        # The value matters too, not just the interpretation. 1.0 here would
+        # still fail this gate (which reads the interpretation) while sailing
+        # through anyone reading `.value` directly, including the JSON consumer.
+        assert report.fleiss.value == 0.0
+        assert report.krippendorff.value == 0.0
+
+    def test_a_real_panel_still_passes_a_zero_threshold(self) -> None:
+        report = build_report(load_panel(PANEL_DIR))
+        assert check_gate(report, 0.0).passed
+
+    def test_mean_pairwise_skips_pairs_that_were_never_compared(self) -> None:
+        """A disjoint third rater used to drag a perfect pair down to 0.5."""
+        shared = {"i1": "TP", "i2": "FP", "i3": "TP"}
+        raters = {
+            "a": shared,
+            "b": dict(shared),
+            "c": {"z1": "TP", "z2": "FP", "z3": "TP"},
+        }
+        got = mean_pairwise_kappa(raters)
+        assert got["a"] == pytest.approx(1.0)
+        assert got["b"] == pytest.approx(1.0)
+        assert got["c"] is None, "never compared is not the same as agrees with nobody"
+
+    def test_accuracy_respects_the_label_set(self) -> None:
+        """Truth verdicts outside the label set were scored as failures here.
+
+        Every other statistic drops them, so triage flagged LOW ACCURACY off a
+        denominator no other number in the report used.
+        """
+        labels = {"i1": "TP", "i2": "FP", "i3": "TP"}
+        truth = {"i1": "TP", "i2": "FP", "i3": "NEEDS_INVESTIGATION"}
+        assert accuracy(labels, truth) == (2, 3)
+        assert accuracy(labels, truth, ("TP", "FP")) == (2, 2)
+
+    def test_precision_is_scored_only_over_adjudicated_items(self) -> None:
+        """Unadjudicated positives silently counted as false positives.
+
+        Recall and precision were computed over different populations and F1
+        combined them anyway. Partial adjudication is the normal case.
+        """
+        rater = {f"i{i}": "TP" for i in range(1, 6)}
+        truth = {"i1": "TP", "i2": "FP"}
+        got = validity({"a": rater}, truth)["a"]
+        assert got.called == 2, "only the adjudicated calls count"
+        assert got.correct_calls == 1
+        assert got.precision == pytest.approx(0.5)
+        assert got.recall == pytest.approx(1.0)
+
+    def test_a_valid_json_non_object_line_is_skipped_not_fatal(self, tmp_path: Path) -> None:
+        """`[1,2]` and `null` parse, then `.get` raised and escaped as exit 1.
+
+        Exit 1 is reserved for "the gate failed", so CI read a loader crash as
+        an agreement result.
+        """
+        p = tmp_path / "a.jsonl"
+        p.write_text('[1,2]\nnull\n"str"\n{"findingId":"f1","label":"TP"}\n', encoding="utf-8")
+        assert [j.finding_id for j in load_judgments(p)] == ["f1"]
+
+    def test_a_scalar_verdicts_key_does_not_crash(self, tmp_path: Path) -> None:
+        p = tmp_path / "truth.json"
+        p.write_text('{"verdicts": 3}', encoding="utf-8")
+        assert load_truth(p) == {}
+
+    def test_the_cli_exits_two_not_one_on_a_broken_panel(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "a.jsonl").write_bytes(b"\xff\xfe\x00bad")
+        assert main(["report", str(tmp_path)]) == 2
         assert "error:" in capsys.readouterr().err
