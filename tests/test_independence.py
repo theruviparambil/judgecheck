@@ -27,6 +27,8 @@ import pytest
 from judgecheck.agreement import UNDEFINED, UNDEFINED_NO_VARIANCE, cohens_kappa
 from judgecheck.cli import main
 from judgecheck.independence import (
+    CAUTION_EFFICIENCY,
+    NULL_DRAWS,
     PERMUTATIONS,
     _largest_eigenvalue,
     _permuted,
@@ -739,3 +741,116 @@ class TestPermutationsParameter:
         got = coincident_errors(panel.raters, panel.truth, permutations=50)
         assert got.p_value is not None
         assert 0.0 < got.p_value <= 1.0
+
+
+class TestNullCalibration:
+    """The percentage is unreadable without the null it should be read against.
+
+    `k / lambda_max` is biased downward when items are few relative to judges:
+    the top eigenvalue of a correlation matrix built from a handful of
+    observations is inflated by sampling noise alone. So judges that are
+    independent by construction do not score 100%, and reporting "31% of
+    nominal" against an implied ceiling of 100% overstates the dependence by
+    about a factor of two.
+    """
+
+    def test_the_null_is_far_below_one_on_this_panel(self, panel: Panel) -> None:
+        assert panel.truth is not None
+        ind = panel_independence(panel.raters, panel.truth, null_draws=NULL_DRAWS)
+        assert ind.null_efficiency is not None
+        assert 0.45 < ind.null_efficiency.point < 0.65, ind.null_efficiency.point
+        assert ind.null_efficiency.high < 0.8, "independent judges never reach 100% here"
+
+    def test_the_observed_panel_is_below_the_null(self, panel: Panel) -> None:
+        """This is the inferential claim, and it survives calibration."""
+        assert panel.truth is not None
+        ind = panel_independence(panel.raters, panel.truth, null_draws=NULL_DRAWS)
+        assert ind.efficiency is not None and ind.null_efficiency is not None
+        assert ind.efficiency < ind.null_efficiency.low
+        assert ind.p_value is not None and ind.p_value < 0.05
+
+    def test_the_caution_threshold_would_fire_on_independent_panels(self, panel: Panel) -> None:
+        """Which is why the raw percentage cannot carry the claim alone.
+
+        Kohli's 0.5 line was proposed for a panel where the estimator is
+        unbiased. Here the null 95% band straddles it, so a quarter of
+        independent panels of this shape would trip it.
+        """
+        assert panel.truth is not None
+        ind = panel_independence(panel.raters, panel.truth, null_draws=NULL_DRAWS)
+        assert ind.null_efficiency is not None
+        assert ind.null_efficiency.low < CAUTION_EFFICIENCY < ind.null_efficiency.high
+
+    def test_genuinely_independent_judges_are_not_flagged(self, panel: Panel) -> None:
+        """The calibration's whole job: an independent panel must come out clean."""
+        assert panel.truth is not None
+        rng = random.Random(3)
+        items = sorted(panel.truth)
+        # Same error counts as the real panel, redistributed independently.
+        counts = {
+            name: sum(1 for i in items if panel.raters[name].get(i) != panel.truth[i])
+            for name in panel.raters
+        }
+        raters = {}
+        for name, count in counts.items():
+            wrong = set(rng.sample(items, count))
+            raters[name] = {
+                i: ("FP" if panel.truth[i] == "TP" else "TP") if i in wrong else panel.truth[i]
+                for i in items
+            }
+        ind = panel_independence(raters, panel.truth, null_draws=NULL_DRAWS)
+        assert ind.p_value is not None
+        assert ind.p_value > 0.05, "an independent panel must not read as correlated"
+
+    def test_calibration_is_off_by_default(self, panel: Panel) -> None:
+        """It costs about a third of a second; a plain report should stay fast."""
+        assert panel.truth is not None
+        ind = panel_independence(panel.raters, panel.truth)
+        assert ind.null_efficiency is None
+        assert ind.p_value is None
+
+    def test_it_is_deterministic(self, panel: Panel) -> None:
+        assert panel.truth is not None
+        a = panel_independence(panel.raters, panel.truth, null_draws=NULL_DRAWS)
+        b = panel_independence(panel.raters, panel.truth, null_draws=NULL_DRAWS)
+        assert a.null_efficiency == b.null_efficiency
+        assert a.p_value == b.p_value
+
+    def test_a_gate_turns_it_on(self, panel: Panel) -> None:
+        """Same rule the bootstrap follows: calibrate where a decision is made."""
+        plain = build_report(panel)
+        assert plain.independence is not None
+        assert plain.independence.null_efficiency is None
+        gated = build_report(panel, intervals=True)
+        assert gated.independence is not None
+        assert gated.independence.null_efficiency is not None
+
+    def test_the_p_value_is_never_exactly_zero(self, panel: Panel) -> None:
+        assert panel.truth is not None
+        ind = panel_independence(panel.raters, panel.truth, null_draws=NULL_DRAWS)
+        assert ind.p_value is not None and ind.p_value > 0.0
+
+    def test_the_band_is_ordered(self, panel: Panel) -> None:
+        """low <= median <= high, which requires the draws to be sorted first.
+
+        Every other assertion here checks the band's values and would pass on
+        an unordered one that happened to land in range. This is the structural
+        invariant: a percentile taken from an unsorted list is not a percentile.
+        """
+        assert panel.truth is not None
+        ind = panel_independence(panel.raters, panel.truth, null_draws=NULL_DRAWS)
+        band = ind.null_efficiency
+        assert band is not None
+        assert band.low <= band.point <= band.high
+        assert band.width > 0.0, "500 draws of a noisy statistic are not all equal"
+
+    def test_the_band_brackets_a_realistic_share_of_draws(self, panel: Panel) -> None:
+        """A 95% band that is not built from sorted draws will not do this."""
+        assert panel.truth is not None
+        ind = panel_independence(panel.raters, panel.truth, null_draws=NULL_DRAWS)
+        band = ind.null_efficiency
+        assert band is not None
+        # The observed panel sits below the band; an independent redraw sits inside it.
+        assert ind.efficiency is not None
+        assert ind.efficiency < band.low
+        assert band.low < band.point < band.high

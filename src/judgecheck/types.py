@@ -37,6 +37,22 @@ PanelLabels = Sequence[Labels] | Mapping[str, Labels]
 
 
 @dataclass(frozen=True)
+class Interval:
+    """A point estimate and the range resampling puts around it."""
+
+    point: float
+    low: float
+    high: float
+
+    def contains(self, value: float) -> bool:
+        return self.low <= value <= self.high
+
+    @property
+    def width(self) -> float:
+        return self.high - self.low
+
+
+@dataclass(frozen=True)
 class Judgment:
     """One rater's verdict on one item, as read from a `.jsonl` panel file."""
 

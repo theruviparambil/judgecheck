@@ -101,7 +101,26 @@ PANEL INDEPENDENCE ────────────────────�
   effective judges, Kish  7.00 of 7
   effective judges, eigen 2.19 of 7
   reported                2.19 of 7   (31% of nominal, not exchangeable (estimators disagree))
+  independent-panel null  54% of nominal   95% [43%, 65%]
+  p                       0.002   (more correlated than independent judges of this size)
 ```
+
+**Read the percentage against that null, not against 100%.** `k / λ_max` is
+biased downward when items are few relative to judges: the top eigenvalue of a
+correlation matrix estimated from 23 observations is inflated by sampling noise
+alone, so judges that are *independent by construction* score about 54% here,
+never above 71%. An earlier version of this section reported "31% of nominal"
+with no null beside it, which overstated the dependence by roughly a factor of
+two and implied a ceiling the estimator cannot reach.
+
+Two consequences worth stating. The 50% caution line
+[Kohli](https://arxiv.org/abs/2605.29800) proposes was set for a panel where
+the estimator is unbiased; here the null's own 95% band straddles it, so about a
+quarter of *independent* panels of this shape would trip it. And the claim that
+survives is the p value, not the percentage: 0.312 sits below every one of 500
+null draws, so **these judges are measurably not independent** — but "worth 2.19
+of 7 judges" is a description of one panel through a biased estimator, not a
+measurement to two decimals.
 
 Two estimators, and on this panel they disagree by a factor of three. That
 disagreement is the finding.
@@ -432,17 +451,17 @@ ordinary dicts without adopting any types from this package.
 ## How it is verified
 
 ```
-pytest          379 tests on 3.10, 3.11, 3.12, 3.13
+pytest          389 tests on 3.10, 3.11, 3.12, 3.13
 mypy --strict   clean across src, tests, and scripts
 ruff            check and format clean
-mutation sweep  105/105 mutants killed
+mutation sweep  111/111 mutants killed
 cross-check     Fleiss, Krippendorff, 21 Cohen pairs vs third-party libraries
 
-16 of the 379 are the cross-validation tests and need the `crossval` extra;
+16 of the 389 are the cross-validation tests and need the `crossval` extra;
 they skip without it, and CI installs it in a dedicated job.
 ```
 
-Read "105/105" with one caveat, because it is softer than a mutation score usually
+Read "111/111" with one caveat, because it is softer than a mutation score usually
 is. The mutants are a hand-written list of string substitutions rather than
 AST-generated, so **I chose them**, and a mutant nobody thought to write cannot
 survive. It is a checklist of the invariants I believe matter, executed

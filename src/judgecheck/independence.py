@@ -66,7 +66,7 @@ from dataclasses import dataclass
 from itertools import combinations
 
 from .agreement import cohens_kappa
-from .types import LABELS, Labels, Panel, PanelLabels
+from .types import LABELS, Interval, Labels, Panel, PanelLabels
 
 #: A rater name -> group name mapping. The group is whatever cut you want to
 #: examine: the developer, the base architecture, the serving provider, the
@@ -81,6 +81,9 @@ GroupLabels = Mapping[str, str]
 #: than a hard rule, and who defines it on error correlation. It is a reading
 #: aid with no inferential standing, like the bands in `interpret_kappa`.
 CAUTION_EFFICIENCY = 0.5
+
+#: Two-sided coverage for the null band, matching `uncertainty.CONFIDENCE`.
+CONFIDENCE = 0.95
 
 #: How far the two effective-judge estimators may differ, as a ratio, before
 #: the panel is reported as non-exchangeable and the single-number summary is
@@ -103,6 +106,11 @@ PERMUTATIONS = 2000
 
 #: Seed for that test. Fixed for the same reason.
 PERMUTATION_SEED = 20260819
+
+#: Draws used to calibrate the effective-judge figure against its own null.
+#: Cheap: 500 takes about a third of a second on a 7x23 panel, and the null
+#: median moves less than 0.002 between 200 and 500.
+NULL_DRAWS = 500
 
 
 @dataclass(frozen=True)
@@ -152,6 +160,31 @@ class PanelIndependence:
     """
     exchangeable: bool
     """Whether the two estimators agree closely enough to report one number."""
+    null_efficiency: Interval | None
+    """What `efficiency` looks like for judges that are independent by construction.
+
+    This is the number that makes the headline readable, and without it the
+    headline is wrong. `k / lambda_max` is biased downward at small item counts:
+    the largest eigenvalue of a correlation matrix estimated from few
+    observations is inflated by sampling noise alone (the Marchenko-Pastur
+    edge), so even perfectly independent judges do not score 100%.
+
+    On a 7-judge, 23-item panel the null median is 0.54, not 1.0. Reporting
+    "31% of nominal" against an implied ceiling of 100% therefore overstates the
+    dependence by roughly a factor of two, and the 50% caution threshold fires
+    on about a quarter of independent panels of this shape.
+
+    Computed by permuting each judge's errors across the items it scored,
+    holding its error count fixed, which is the same null `coincident_errors`
+    uses. `None` when independence was not measurable.
+    """
+    p_value: float | None
+    """Share of null draws whose efficiency was at or below the observed one.
+
+    Small means the panel is more correlated than independent judges of this
+    size and accuracy would be. This is the inferential claim; the raw
+    percentage is descriptive.
+    """
     interpretation: str
 
     @property
@@ -395,14 +428,112 @@ def effective_raters(k: int, mean_phi: float) -> float:
     return k / (1 + (k - 1) * rho)
 
 
+def _efficiency_from_errors(
+    errors: Mapping[str, set[str]], names: Sequence[str], items: Sequence[str]
+) -> float | None:
+    """Eigenvalue-based efficiency for one configuration of judge errors."""
+    k = len(names)
+    if k < 2:
+        return None
+    matrix = [[1.0 if i == j else 0.0 for j in range(k)] for i in range(k)]
+    defined = 0
+    for i, j in combinations(range(k), 2):
+        ea = [1 if item in errors[names[i]] else 0 for item in items]
+        eb = [1 if item in errors[names[j]] else 0 for item in items]
+        value = _phi(ea, eb)
+        if value is not None:
+            matrix[i][j] = matrix[j][i] = value
+            defined += 1
+    if defined == 0:
+        return None
+    lambda_max = _largest_eigenvalue(matrix)
+    if lambda_max <= 0:
+        return 1.0
+    return min(1.0, max(1.0 / k, (k / lambda_max) / k))
+
+
+def _null_efficiency(
+    named: Mapping[str, Labels],
+    names: Sequence[str],
+    truth: Labels,
+    label_set: frozenset[str],
+    observed: float,
+    draws: int = NULL_DRAWS,
+) -> tuple[Interval | None, float | None]:
+    """Where `observed` sits against judges that are independent by construction.
+
+    `k / lambda_max` is biased downward when the item count is small relative to
+    the judge count. The largest eigenvalue of a correlation matrix estimated
+    from few observations is inflated by sampling noise alone, so a panel of
+    genuinely independent judges does not score 100%. On the panel in this
+    repository the null median is 0.54.
+
+    Reporting the raw percentage without this is the same category of error the
+    module docstring describes twice already: a number that looks like a
+    measurement of the judges and is substantially a measurement of the
+    estimator. So the null is computed and printed beside it.
+
+    Same null as `coincident_errors`: each judge keeps its error count and has
+    those errors redistributed across the items it scored. Seeded, because the
+    report is asserted bit-identical across process hash seeds.
+    """
+    items = [
+        item
+        for item in sorted(truth)
+        if truth[item] in label_set and any(named[n].get(item) in label_set for n in names)
+    ]
+    if len(items) < MIN_PAIR_ITEMS or len(names) < 2:
+        return None, None
+
+    flags = {
+        n: {
+            item: int(named[n][item] != truth[item])
+            for item in items
+            if named[n].get(item) in label_set
+        }
+        for n in names
+    }
+
+    rng = random.Random(PERMUTATION_SEED)
+    drawn: list[float] = []
+    for _ in range(draws):
+        value = _efficiency_from_errors(_permuted(flags, rng), names, items)
+        if value is not None:
+            drawn.append(value)
+    if not drawn:
+        return None, None
+
+    drawn.sort()
+    tail = (1.0 - CONFIDENCE) / 2
+
+    def q(fraction: float) -> float:
+        index = round(fraction * (len(drawn) - 1))
+        return drawn[max(0, min(len(drawn) - 1, index))]
+
+    band = Interval(point=q(0.5), low=q(tail), high=q(1.0 - tail))
+    # Add-one, as elsewhere: 500 draws cannot support a claim of exactly zero.
+    hits = sum(1 for value in drawn if value <= observed)
+    return band, (hits + 1) / (len(drawn) + 1)
+
+
 def panel_independence(
-    raters: PanelLabels, truth: Labels, labels: Sequence[str] = LABELS
+    raters: PanelLabels,
+    truth: Labels,
+    labels: Sequence[str] = LABELS,
+    null_draws: int = 0,
 ) -> PanelIndependence:
     """Effective judge count from pairwise error correlation.
 
     Requires adjudicated truth. Without it there is no error vector to
     correlate, and the label-agreement substitute is not merely less precise but
     directionally wrong (see the module docstring).
+
+    `null_draws` calibrates the reported efficiency against judges that are
+    independent by construction, which the percentage needs in order to be
+    readable: this estimator does not reach 100% on independent judges when the
+    item count is small. Off by default because it costs about a third of a
+    second; `build_report` enables it wherever a gate or an interval is being
+    computed.
 
     Two estimators are reported, following the source paper: Kish's design
     effect over the mean correlation, and `k / lambda_max` over the correlation
@@ -448,6 +579,8 @@ def panel_independence(
             efficiency=None,
             saturated=False,
             exchangeable=True,
+            null_efficiency=None,
+            p_value=None,
             interpretation="not measurable",
         )
 
@@ -473,6 +606,8 @@ def panel_independence(
             efficiency=None,
             saturated=False,
             exchangeable=True,
+            null_efficiency=None,
+            p_value=None,
             interpretation="not measurable",
         )
 
@@ -487,6 +622,19 @@ def panel_independence(
     lambda_max = _largest_eigenvalue(matrix)
     eigen = k / lambda_max if lambda_max > 0 else float(k)
     eigen = min(float(k), max(1.0, eigen))
+
+    # Calibrate the reported figure against judges that are independent by
+    # construction. Without this the percentage is read against an implied
+    # ceiling of 100%, which k / lambda_max does not reach at small item counts.
+    # Off by default: 500 draws cost about a third of a second, which is fine
+    # once and not fine on every call in a test suite. `build_report` turns it
+    # on wherever a decision is being made, which is the same rule the bootstrap
+    # intervals follow.
+    null_efficiency, p_value = (
+        _null_efficiency(named, contributing, truth, label_set, min(kish, eigen) / k, null_draws)
+        if null_draws > 0
+        else (None, None)
+    )
 
     lo, hi = min(kish, eigen), max(kish, eigen)
     exchangeable = hi <= lo * EXCHANGEABILITY_TOLERANCE
@@ -509,6 +657,8 @@ def panel_independence(
         efficiency=efficiency,
         saturated=mean_phi <= 0.0,
         exchangeable=exchangeable,
+        null_efficiency=null_efficiency,
+        p_value=p_value,
         interpretation=interpretation,
     )
 

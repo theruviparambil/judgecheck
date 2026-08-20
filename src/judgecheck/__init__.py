@@ -33,6 +33,7 @@ from .triage import RaterTriage, split_leaning, triage
 from .types import (
     LABELS,
     ConsensusEntry,
+    Interval,
     Judgment,
     KappaResult,
     Labels,
@@ -43,7 +44,6 @@ from .types import (
 from .uncertainty import (
     BOOTSTRAP_DRAWS,
     CONFIDENCE,
-    Interval,
     PanelIntervals,
     bootstrap_intervals,
 )

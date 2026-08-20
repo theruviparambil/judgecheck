@@ -36,7 +36,7 @@ from dataclasses import dataclass
 
 from .agreement import fleiss_kappa, krippendorff_alpha
 from .independence import panel_independence
-from .types import LABELS, Panel
+from .types import LABELS, Interval, Panel
 
 #: Resamples per interval. Enough for a stable 95% percentile interval without
 #: making a report noticeably slow; the whole thing runs in well under a second
@@ -53,22 +53,6 @@ BOOTSTRAP_SEED = 20260819
 #: Two-sided coverage. Not configurable: a caller-varied level would also break
 #: the determinism guarantee, and 95% is the convention this report is read by.
 CONFIDENCE = 0.95
-
-
-@dataclass(frozen=True)
-class Interval:
-    """A point estimate and the range resampling puts around it."""
-
-    point: float
-    low: float
-    high: float
-
-    def contains(self, value: float) -> bool:
-        return self.low <= value <= self.high
-
-    @property
-    def width(self) -> float:
-        return self.high - self.low
 
 
 @dataclass(frozen=True)

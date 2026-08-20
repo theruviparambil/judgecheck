@@ -26,6 +26,7 @@ from .agreement import (
 from .consensus import MAJORITY, SPLIT, UNANIMOUS, UNSCORED, consensus, split_items
 from .independence import (
     CAUTION_EFFICIENCY,
+    NULL_DRAWS,
     CoincidentError,
     GroupAgreement,
     GroupLabels,
@@ -134,7 +135,14 @@ def build_report(
         ),
         validity=(validity(panel.raters, panel.truth, positive_label) if panel.truth else None),
         independence=(
-            panel_independence(panel.raters, panel.truth, label_tuple) if panel.truth else None
+            panel_independence(
+                panel.raters,
+                panel.truth,
+                label_tuple,
+                null_draws=NULL_DRAWS if intervals else 0,
+            )
+            if panel.truth
+            else None
         ),
         coincidence=(
             coincident_errors(panel.raters, panel.truth, label_tuple) if panel.truth else None
@@ -357,6 +365,17 @@ def to_dict(report: PanelReport, gate: Gate | None = None) -> dict[str, Any]:
             "efficiency": ind.efficiency,
             "exchangeable": ind.exchangeable,
             "saturated": ind.saturated,
+            "nullEfficiency": (
+                {
+                    "median": ind.null_efficiency.point,
+                    "low": ind.null_efficiency.low,
+                    "high": ind.null_efficiency.high,
+                    "draws": NULL_DRAWS,
+                }
+                if ind.null_efficiency is not None
+                else None
+            ),
+            "pValue": ind.p_value,
             "interpretation": ind.interpretation,
             "cautionBelow": CAUTION_EFFICIENCY,
         }
@@ -505,6 +524,19 @@ def render_text(report: PanelReport, gate: Gate | None = None) -> str:
             if report.intervals is not None and report.intervals.effective_raters is not None:
                 band = report.intervals.effective_raters
                 add(f"  {'':<23} {CONFIDENCE:.0%} interval [{band.low:.2f}, {band.high:.2f}]")
+            if ind.null_efficiency is not None and ind.p_value is not None:
+                null = ind.null_efficiency
+                add(
+                    f"  independent-panel null  {null.point * 100:.0f}% of nominal"
+                    f"   {CONFIDENCE:.0%} [{null.low * 100:.0f}%, {null.high * 100:.0f}%]"
+                )
+                verdict = (
+                    "more correlated than independent judges of this size"
+                    if ind.p_value <= 0.05
+                    else "within what independent judges of this size produce"
+                )
+                shown_p = f"{ind.p_value:.3f}" if ind.p_value >= 0.0005 else "<0.001"
+                add(f"  p                       {shown_p}   ({verdict})")
             if ind.excluded_raters:
                 add(
                     f"  excluded                {', '.join(ind.excluded_raters)}"
@@ -539,7 +571,18 @@ def render_text(report: PanelReport, gate: Gate | None = None) -> str:
             add("  This is not a quality score. Judges can be independently wrong, which")
             add("  reads as high independence and is still a bad panel. Read it next to")
             add("  the validity table, never instead of it.")
-            if ind.efficiency < CAUTION_EFFICIENCY:
+            if ind.null_efficiency is not None:
+                add("")
+                add("  Read the percentage against the null, not against 100%. This estimator")
+                add("  is biased low when items are few relative to judges: the top eigenvalue")
+                add("  of a correlation matrix built from a handful of observations is inflated")
+                add("  by sampling noise alone, so judges that are independent by construction")
+                add(
+                    f"  score {ind.null_efficiency.point:.0%} here, not 100%. "
+                    "The p value is the claim;"
+                )
+                add("  the percentage is description.")
+            elif ind.efficiency < CAUTION_EFFICIENCY:
                 add("")
                 add(
                     f"  Below {CAUTION_EFFICIENCY:.0%} of nominal. Treat panel votes with caution "

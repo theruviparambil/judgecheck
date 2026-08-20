@@ -21,11 +21,10 @@ import pytest
 from judgecheck.cli import main
 from judgecheck.io import load_panel
 from judgecheck.report import build_report, check_gate, render_text, to_dict
-from judgecheck.types import Panel
+from judgecheck.types import Interval, Panel
 from judgecheck.uncertainty import (
     BOOTSTRAP_DRAWS,
     CONFIDENCE,
-    Interval,
     _resample,
     bootstrap_intervals,
 )

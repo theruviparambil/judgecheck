@@ -614,6 +614,42 @@ MUTANTS: list[tuple[str, str, str, str]] = [
         "    verdicts = raw",
     ),
     (
+        "independence: null calibration silently skipped",
+        "independence.py",
+        "        if null_draws > 0",
+        "        if False",
+    ),
+    (
+        "independence: null drawn unseeded, report stops being reproducible",
+        "independence.py",
+        "    rng = random.Random(PERMUTATION_SEED)\n    drawn: list[float] = []",
+        "    rng = random.Random()\n    drawn: list[float] = []",
+    ),
+    (
+        "independence: null p loses the add-one correction",
+        "independence.py",
+        "    return band, (hits + 1) / (len(drawn) + 1)",
+        "    return band, hits / len(drawn)",
+    ),
+    (
+        "independence: null band endpoints taken from the wrong tail",
+        "independence.py",
+        "    band = Interval(point=q(0.5), low=q(tail), high=q(1.0 - tail))",
+        "    band = Interval(point=q(0.5), low=q(1.0 - tail), high=q(tail))",
+    ),
+    (
+        "independence: null draws not sorted before taking quantiles",
+        "independence.py",
+        "    drawn.sort()",
+        "    pass",
+    ),
+    (
+        "report: a gate no longer turns on the null calibration",
+        "report.py",
+        "                null_draws=NULL_DRAWS if intervals else 0,",
+        "                null_draws=0,",
+    ),
+    (
         "independence: permutations count not validated",
         "independence.py",
         "    if permutations < 1:",
