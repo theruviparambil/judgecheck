@@ -451,17 +451,17 @@ ordinary dicts without adopting any types from this package.
 ## How it is verified
 
 ```
-pytest          389 tests on 3.10, 3.11, 3.12, 3.13
+pytest          394 tests on 3.10, 3.11, 3.12, 3.13
 mypy --strict   clean across src, tests, and scripts
 ruff            check and format clean
-mutation sweep  111/111 mutants killed
+mutation sweep  113/113 mutants killed
 cross-check     Fleiss, Krippendorff, 21 Cohen pairs vs third-party libraries
 
-16 of the 389 are the cross-validation tests and need the `crossval` extra;
+16 of the 394 are the cross-validation tests and need the `crossval` extra;
 they skip without it, and CI installs it in a dedicated job.
 ```
 
-Read "111/111" with one caveat, because it is softer than a mutation score usually
+Read "113/113" with one caveat, because it is softer than a mutation score usually
 is. The mutants are a hand-written list of string substitutions rather than
 AST-generated, so **I chose them**, and a mutant nobody thought to write cannot
 survive. It is a checklist of the invariants I believe matter, executed

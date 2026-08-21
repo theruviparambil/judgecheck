@@ -55,7 +55,7 @@ BOOTSTRAP_SEED = 20260819
 CONFIDENCE = 0.95
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class PanelIntervals:
     """Bootstrap intervals for the statistics a gate can be set on."""
 

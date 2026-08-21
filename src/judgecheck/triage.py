@@ -50,7 +50,7 @@ REVIEW = "REVIEW"
 DROP = "DROP / DOWN-WEIGHT"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class RaterTriage:
     rater: str
     labeled: int

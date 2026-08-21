@@ -668,6 +668,18 @@ MUTANTS: list[tuple[str, str, str, str]] = [
         "return self.correct_calls / self.called if self.called else 0.0",
     ),
     (
+        "types: result dataclasses accept positional construction",
+        "types.py",
+        "@dataclass(frozen=True, kw_only=True)\nclass KappaResult:",
+        "@dataclass(frozen=True)\nclass KappaResult:",
+    ),
+    (
+        "report: PanelReport accepts positional construction",
+        "report.py",
+        "@dataclass(frozen=True, kw_only=True)\nclass PanelReport:",
+        "@dataclass(frozen=True)\nclass PanelReport:",
+    ),
+    (
         "validity: rater name dropped on the way out",
         "validity.py",
         "        rater=rater,",

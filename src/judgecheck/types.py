@@ -38,7 +38,12 @@ PanelLabels = Sequence[Labels] | Mapping[str, Labels]
 
 @dataclass(frozen=True)
 class Interval:
-    """A point estimate and the range resampling puts around it."""
+    """A point estimate and the range resampling puts around it.
+
+    Deliberately not `kw_only`, unlike every other result type here. Three
+    fields in one natural order read better positionally, and there is nowhere
+    to insert a fourth that would silently change meaning.
+    """
 
     point: float
     low: float
@@ -52,7 +57,7 @@ class Interval:
         return self.high - self.low
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Judgment:
     """One rater's verdict on one item, as read from a `.jsonl` panel file."""
 
@@ -64,7 +69,7 @@ class Judgment:
     vendor: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Panel:
     """A set of raters that labeled the same items, with optional truth."""
 
@@ -85,7 +90,7 @@ class Panel:
         return tuple(sorted(ids))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class KappaResult:
     """Two-rater agreement."""
 
@@ -98,7 +103,7 @@ class KappaResult:
     interpretation: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MultiRaterResult:
     """Panel-level agreement across more than two raters."""
 
@@ -110,7 +115,7 @@ class MultiRaterResult:
     interpretation: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class RaterValidity:
     """How well one rater tracks adjudicated truth, for the positive label.
 
@@ -155,7 +160,7 @@ class RaterValidity:
         return 2 * p * r / (p + r) if (p + r) else 0.0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ConsensusEntry:
     """Where the panel landed on a single item."""
 

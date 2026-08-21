@@ -42,7 +42,7 @@ from .uncertainty import CONFIDENCE, PanelIntervals, bootstrap_intervals
 from .validity import POSITIVE, validity
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class PanelReport:
     """Everything judgecheck knows about one panel."""
 
@@ -154,7 +154,7 @@ def build_report(
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Gate:
     """The result of checking a panel against the thresholds CI asked for.
 

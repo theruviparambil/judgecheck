@@ -534,3 +534,94 @@ class TestGuardsTheThirdSweepFound:
         (tmp_path / "a.jsonl").write_bytes(b"\xff\xfe\x00bad")
         assert main(["report", str(tmp_path)]) == 2
         assert "error:" in capsys.readouterr().err
+
+
+class TestPublicApiShape:
+    """Things that get harder to change once anyone imports this."""
+
+    def test_every_constant_a_caller_branches_on_is_exported(self) -> None:
+        """Result strings and thresholds, because the submodules are shadowed.
+
+        `from .triage import triage` makes `judgecheck.triage` the *function*,
+        so `import judgecheck.triage as t; t.KEEP` raises AttributeError. Four
+        names collide that way (triage, validity, consensus, accuracy). Renaming
+        would break every caller, so instead nothing needs the module.
+        """
+        import judgecheck
+
+        needed = [
+            "KEEP",
+            "REVIEW",
+            "DROP",
+            "BALANCED",
+            "LENIENT",
+            "STRICT",
+            "UNKNOWN",
+            "SKEW_THRESHOLD",
+            "ABSTENTION_THRESHOLD",
+            "ACCURACY_THRESHOLD",
+            "REDUNDANT_KAPPA",
+            "LEAN_THRESHOLD",
+            "POSITIVE",
+            "UNANIMOUS",
+            "MAJORITY",
+            "SPLIT",
+            "UNSCORED",
+            "UNDEFINED",
+            "UNDEFINED_NO_VARIANCE",
+            "CAUTION_EFFICIENCY",
+            "MIN_PAIR_ITEMS",
+            "PERMUTATIONS",
+            "BOOTSTRAP_DRAWS",
+        ]
+        missing = [n for n in needed if n not in judgecheck.__all__]
+        assert not missing, f"not exported: {missing}"
+        assert all(hasattr(judgecheck, n) for n in needed)
+
+    def test_the_module_shadowing_is_real_and_documented(self) -> None:
+        """Pinned so the docstring's explanation cannot quietly become false."""
+        import judgecheck
+
+        assert callable(judgecheck.triage)
+        assert callable(judgecheck.validity)
+        assert callable(judgecheck.consensus)
+        assert "judgecheck.triage` is the" in (judgecheck.__doc__ or "")
+
+    def test_result_types_are_keyword_only(self) -> None:
+        """Field order is not public API. `PanelReport` has 17 fields.
+
+        Without this, inserting a statistic is a breaking change for anyone who
+        constructed one positionally.
+
+        Each call below supplies the *correct number* of positional arguments,
+        which matters: a short call raises "missing N required positional
+        arguments" whether or not the class is keyword-only, so an earlier
+        version of this test passed either way and let the mutation sweep
+        catch it.
+        """
+        from judgecheck import KappaResult
+
+        # KappaResult has exactly four fields, so this is a complete
+        # positional construction and can only fail on kw_only.
+        with pytest.raises(TypeError, match="takes 1 positional argument"):
+            KappaResult(23, 0.87, 0.52, "moderate")  # type: ignore[call-arg]
+
+        # And it still builds by keyword.
+        got = KappaResult(n=23, agreement=0.87, kappa=0.52, interpretation="moderate")
+        assert got.kappa == pytest.approx(0.52)
+
+    def test_the_report_type_is_keyword_only_too(self) -> None:
+        """17 fields, so positional construction is where a silent break lives."""
+        import dataclasses
+
+        from judgecheck import PanelReport
+
+        fields = dataclasses.fields(PanelReport)
+        assert len(fields) > 10, "if this shrank, the argument below weakened"
+        assert all(f.kw_only for f in fields), "every field must be keyword-only"
+
+    def test_interval_stays_positional_on_purpose(self) -> None:
+        """Three fields, one natural order, nowhere to insert a fourth."""
+        from judgecheck import Interval
+
+        assert Interval(0.5, 0.2, 0.8).width == pytest.approx(0.6)

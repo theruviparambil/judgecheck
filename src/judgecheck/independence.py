@@ -113,7 +113,7 @@ PERMUTATION_SEED = 20260819
 NULL_DRAWS = 500
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class PanelIndependence:
     """What a panel's judges are jointly worth, in units of independent judges."""
 
@@ -199,7 +199,7 @@ class PanelIndependence:
         return self.efficiency * self.raters
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class PairCoincidence:
     """How often two raters are wrong on the same item."""
 
@@ -231,7 +231,7 @@ class PairCoincidence:
     """Correlation of the two error vectors. `None` when undefined."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class CoincidentError:
     """Coincident-error analysis across every pair in a panel."""
 
@@ -250,7 +250,7 @@ class CoincidentError:
     """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class GroupAgreement:
     """Within-group against between-group agreement, for a supplied grouping.
 
