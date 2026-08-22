@@ -37,8 +37,7 @@ ROOT = Path(__file__).parent.parent
 # published whichever file it lives in, and splitting the docs must not
 # silently drop a number from the guard.
 README = "\n".join(
-    (ROOT / name).read_text(encoding="utf-8")
-    for name in ("README.md", "docs/METHODOLOGY.md")
+    (ROOT / name).read_text(encoding="utf-8") for name in ("README.md", "docs/METHODOLOGY.md")
 )
 PANEL_DIR = Path(__file__).parent / "data" / "panel-real"
 
