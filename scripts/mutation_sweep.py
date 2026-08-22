@@ -770,7 +770,7 @@ def _suite_passes(root: Path) -> bool:
 
 #: Copied into the sandbox. Everything the suite imports or reads, and nothing
 #: else -- no .venv, no .git, no caches.
-_COPY = ("src", "tests", "scripts", "pyproject.toml", "README.md")
+_COPY = ("src", "tests", "scripts", "pyproject.toml", "README.md", "docs")
 
 
 def _make_sandbox(dest: Path) -> Path:

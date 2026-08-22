@@ -33,7 +33,13 @@ from judgecheck.triage import (
 )
 
 ROOT = Path(__file__).parent.parent
-README = (ROOT / "README.md").read_text(encoding="utf-8")
+# The README and the methodology doc are checked TOGETHER: a claim is still
+# published whichever file it lives in, and splitting the docs must not
+# silently drop a number from the guard.
+README = "\n".join(
+    (ROOT / name).read_text(encoding="utf-8")
+    for name in ("README.md", "docs/METHODOLOGY.md")
+)
 PANEL_DIR = Path(__file__).parent / "data" / "panel-real"
 
 
