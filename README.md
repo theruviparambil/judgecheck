@@ -29,7 +29,7 @@ judgecheck report tests/data/panel-real
 · [what this cannot tell you](#what-this-cannot-tell-you)
 · [gating CI](#gating-ci)
 · [how it is verified](#how-it-is-verified)
-· [methodology](docs/METHODOLOGY.md)
+· [methodology](https://github.com/theruviparambil/judgecheck/blob/main/docs/METHODOLOGY.md)
 
 ---
 
@@ -167,7 +167,7 @@ It is not a quality score either. These same seven judges have a Fleiss' κ of
 independently wrong. Read this next to the validity table, never instead of it.
 
 Two further questions this raises, worked through in
-[docs/METHODOLOGY.md](docs/METHODOLOGY.md): why the estimator is built on
+[docs/METHODOLOGY.md](https://github.com/theruviparambil/judgecheck/blob/main/docs/METHODOLOGY.md): why the estimator is built on
 **errors** rather than agreement, and why there is no same-family versus
 cross-family split.
 
